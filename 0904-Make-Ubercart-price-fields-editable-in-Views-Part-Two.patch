@@ -1,0 +1,144 @@
+---
+ drupal_jeditable.js                     |   29 ++++++++++++++++++++++++++++-
+ jeditable.module                        |   12 +++++++++---
+ views/jeditable.views.inc               |    4 ++--
+ views/jeditable_handler_field_price.inc |    7 ++++---
+ 4 files changed, 43 insertions(+), 9 deletions(-)
+
+diff --git a/drupal_jeditable.js b/drupal_jeditable.js
+index 42b0607..4cf0ef3 100644
+--- a/drupal_jeditable.js
++++ b/drupal_jeditable.js
+@@ -6,7 +6,21 @@ Drupal.behaviors.jeditable = function(context) {
+       tooltip   : 'Click to edit...',
+       cancel    : 'Cancel',
+       submit    : 'Save',
+-      style     : 'display: inline; min-width: 100px;'
++      style     : 'display: inline; min-width: 100px;',
++    });
++  }
++  if ($('.jeditable-textfield-price').length) {
++    $('.jeditable-textfield-price').editable('/jeditable/ajax/save', {
++      loadurl  : '/jeditable/ajax/load',
++      indicator : 'Saving...',
++      tooltip   : 'Click to edit...',
++      cancel    : 'Cancel',
++      submit    : 'Save',
++      style     : 'display: inline; min-width: 100px;',
++      callback  : function (value, settings) {
++        var rounded = parseFloat(value).toFixed(2);
++        $(this).text(rounded);
++      }
+     });
+   }
+   if ($('.jeditable-textarea').length) {
+@@ -40,6 +54,19 @@ Drupal.behaviors.jeditable = function(context) {
+       }
+     });
+   }
++  if ($('.jeditable-textfield-price-reload').length) {
++    $('.jeditable-textfield-price-reload').editable('/jeditable/ajax/save', {
++      loadurl  : '/jeditable/ajax/load',
++      indicator : 'Saving...',
++      tooltip   : 'Click to edit...',
++      cancel    : 'Cancel',
++      submit    : 'Save',
++      style     : 'display: inline; min-width: 100px;',
++      callback : function (value, settings) {
++        window.location.reload();
++      }
++    });
++  }
+   if ($('.jeditable-textarea-reload').length) {
+     $('.jeditable-textarea-reload').editable('/jeditable/ajax/save', { 
+       loadurl  : '/jeditable/ajax/load',
+diff --git a/jeditable.module b/jeditable.module
+index b772242..ef29c5e 100644
+--- a/jeditable.module
++++ b/jeditable.module
+@@ -232,7 +232,12 @@ function _jeditable_ajax_save() {
+       }
+       else {
+         $precision = variable_get('uc_currency_prec', 2);
+-        $node->{$field_name} = number_format($value, $precision);
++        $value = round($value, $precision);
++        // Find out the tax on 100 currency units (e.g. 122).
++        $factor = uc_price(100, array('revision' => 'altered', 'type' => 'product', 'subject' => array('node' => $node)));
++        // Ubercart stores prices to max 5 digits.
++        $before_taxes = round(100 * $value / $factor, 5);
++        $node->{$field_name} = $before_taxes;
+         node_save($node);
+       }
+       break;
+@@ -504,10 +509,11 @@ function _jeditable_ajax_load() {
+       $defaults = json_encode(_jeditable_workflow_load($node, $field_name));
+       break;
+     case 'price':
+-      // Prices need to be formatted to remove excess zeros.
+       $node = node_load($id);
+       $precision = variable_get('uc_currency_prec', 2);
+-      $defaults = number_format($node->{$field_name}, $precision);
++      $defaults = uc_price($node->{$field_name}, array('revision' => 'altered', 'type' => 'product', 'subject' => array('node' => $node)));
++      // uc_vat does not respect rounding options, need to round it ourselves.
++      $defaults = round($defaults, $precision);
+       break;
+   }
+   print $defaults;
+diff --git a/views/jeditable.views.inc b/views/jeditable.views.inc
+index 75c766a..663b53e 100644
+--- a/views/jeditable.views.inc
++++ b/views/jeditable.views.inc
+@@ -22,7 +22,7 @@ function jeditable_views_data_alter(&$data) {
+       if (isset($item_config['field']) && $item_config['field']['handler'] == 'workflow_views_handler_field_sid') {
+         $data[$table][$item]['field']['handler'] = 'jeditable_handler_field_sid';
+       }
+-      if (isset($item_config['field']) && $item_config['field']['handler'] == 'uc_product_handler_field_price') {
++      if (isset($item_config['field']) && $item_config['field']['handler'] == 'uc_vat_handler_field_price') {
+         $data[$table][$item]['field']['handler'] = 'jeditable_handler_field_price';
+       }
+     }
+@@ -53,7 +53,7 @@ function jeditable_views_handlers() {
+         'parent' => 'workflow_views_handler_field_sid',
+       ),
+       'jeditable_handler_field_price' => array(
+-        'parent' => 'uc_product_handler_field_price',
++        'parent' => 'uc_vat_handler_field_price',
+       ),
+     ),
+   );
+diff --git a/views/jeditable_handler_field_price.inc b/views/jeditable_handler_field_price.inc
+index 9cd355e..b9e4cb7 100644
+--- a/views/jeditable_handler_field_price.inc
++++ b/views/jeditable_handler_field_price.inc
+@@ -6,9 +6,9 @@
+  */
+ 
+ /**
+- * Extends the uc_product_handler_field_price class.
++ * Extends the uc_vat_handler_field_price class.
+  */
+-class jeditable_handler_field_price extends uc_product_handler_field_price {
++class jeditable_handler_field_price extends uc_vat_handler_field_price {
+ 
+   function option_definition() {
+     $options = parent::option_definition();
+@@ -104,7 +104,7 @@ class jeditable_handler_field_price extends uc_product_handler_field_price {
+         $inline_editor_class = "jeditable-{$field_name}";
+       }
+       else {
+-        $inline_editor_class = "jeditable-textfield";
++        $inline_editor_class = "jeditable-textfield-price";
+         if ($reload_page) {
+           $inline_editor_class .= "-reload";
+         }
+@@ -113,6 +113,7 @@ class jeditable_handler_field_price extends uc_product_handler_field_price {
+       $no_tags_value = strip_tags($value);
+       $id = 'price-'. $values->nid .'-'. $field_name;
+       $inline_editor = '<span id="' . $id . '" class="' . $inline_editor_class . '">'. $no_tags_value .'</span>';
++      $inline_editor = str_replace($currency_sign, '', $inline_editor);
+       $inline_editor = $sign_flag ? $inline_editor . $currency_sign : $currency_sign . $inline_editor;
+ 
+       if (!empty($value)) {
+-- 
+1.7.9.5
+
